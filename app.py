@@ -28,7 +28,8 @@ logger.addHandler(file_handler)
 # ------------------
 # This CONFIG dictionary now includes parameters needed for Managed Identity authentication.
 CONFIG = {
-    "client_id": "405a9ef7-5457-4381-9c0c-f3c9321e4a89",      # Your APP_REGISTRATION_CLIENT_ID
+    #"client_id": "405a9ef7-5457-4381-9c0c-f3c9321e4a89",      # Your APP_REGISTRATION_CLIENT_ID
+    "client_id": "4f6c8552-7b64-4327-9b2b-8d32b41bfe44",
     #"authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47",
     "authority": "https://login.microsoftonline.com/16b3c013-d300-468d-ac64-7eda0820b6d3",
     "scopes": "api://9021b3a5-1f0d-4fb7-ad3f-d6989f0432d8/.default",  # Zebra API scope
@@ -40,7 +41,8 @@ CONFIG = {
     },
     # Managed Identity / Federated credentials
     "RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",   # Corp Tenant ID
-    "MI_CLIENT_ID": "4f6c8552-7b64-4327-9b2b-8d32b41bfe44",           # Managed Identity Client ID
+    #"MI_CLIENT_ID": "4f6c8552-7b64-4327-9b2b-8d32b41bfe44",           # Managed Identity Client ID
+    "MI_CLIENT_ID": "405a9ef7-5457-4381-9c0c-f3c9321e4a89",           # Managed Identity Client ID
     # For broker flows, you might also include "AZURE_REGION": "eSTS-R", etc.
 }
 
