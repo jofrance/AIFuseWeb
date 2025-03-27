@@ -2,19 +2,19 @@ import threading
 import requests
 import json
 import time
+import os
 from flask import Flask, request, jsonify, render_template_string
 
 # ------------------
 # Configuration Setup
 # ------------------
-# Here we mimic your config module in-line.
 CONFIG = {
     "client_id": "751c47e2-782e-4d75-b304-37f68a9d45fd",
     "authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47",
     "scopes": "api://9021b3a5-1f0d-4fb7-ad3f-d6989f0432d8/.default",
-    "apiUrl": "https://zebra-ai-api-prd.azurewebsites.net/",         # Replace with your API URL
-    "experimentId": "582c5e80-b307-43f9-bc86-efd0a6551907",       # Replace with your experiment ID
-    "API_TIMEOUT": 30,                          # In seconds
+    "apiUrl": "https://zebra-ai-api-prd.azurewebsites.net/",
+    "experimentId": "582c5e80-b307-43f9-bc86-efd0a6551907",
+    "API_TIMEOUT": 30,  # In seconds
     "Custom Chat Instructions": {
          "ChatCustomization": "Be formal, courteous, and clear in your responses."
     }
@@ -27,15 +27,12 @@ token_lock = threading.Lock()
 def get_access_token():
     """Acquire an access token using MSAL."""
     from msal import PublicClientApplication
-    # Check if the "msal_app" key exists in CONFIG; if not, initialize it.
     if CONFIG.get("msal_app") is None:
         CONFIG["msal_app"] = PublicClientApplication(
             client_id=CONFIG["client_id"],
             authority=CONFIG["authority"],
-            # enable_broker_on_windows=True  # Uncomment if needed.
         )
     accounts = CONFIG["msal_app"].get_accounts()
-    # Ensure scopes is a list.
     scopes = CONFIG["scopes"]
     if isinstance(scopes, str):
         scopes = [scopes]
@@ -53,15 +50,13 @@ def get_access_token():
 # ------------------
 # Chat Functionality
 # ------------------
-# Global conversation history for chat mode.
 conversation_history = []
 
 def call_chat_api(payload, headers):
     """
     Calls the API endpoint with the given payload and headers.
     Retries every 5 seconds until a valid reply is obtained.
-    Returns the assistant's reply and updates the conversation_history
-    from the API response if provided.
+    Returns the assistant's reply and updates the conversation_history.
     """
     api_endpoint = f'{CONFIG["apiUrl"]}experiment/{CONFIG["experimentId"]}'
     reply = None
@@ -72,12 +67,10 @@ def call_chat_api(payload, headers):
                 data = response.json()
                 messages = data.get("chatHistory", {}).get("messages", [])
                 if messages:
-                    # Assume the last message is the assistant reply.
                     last_message = messages[-1]
                     reply = last_message.get("content", "No content in reply.")
                 else:
                     reply = "No messages in API response."
-                # If the API returns a chatHistory, update our conversation.
                 if "chatHistory" in data and "messages" in data["chatHistory"]:
                     conversation_history[:] = data["chatHistory"]["messages"]
             else:
@@ -93,7 +86,6 @@ def call_chat_api(payload, headers):
 # ------------------
 app = Flask(__name__)
 
-# HTML template (self-contained) for the chat interface.
 CHAT_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -153,7 +145,6 @@ CHAT_TEMPLATE = """
 
 @app.route("/")
 def index():
-    # Render the chat template with the current conversation_history.
     return render_template_string(CHAT_TEMPLATE, conversation=conversation_history)
 
 @app.route("/chat", methods=["POST"])
@@ -167,7 +158,6 @@ def chat_route():
             "content": user_message
         })
     else:
-        # On first call, if no message is provided, use a default value.
         if not conversation_history:
             default_search = "123"
             conversation_history.append({
@@ -217,14 +207,21 @@ def chat_route():
         }
         conversation_history.append(system_msg)
 
-    conversation_history.append({
-        "id": f"assistant-{len(conversation_history)+1}",
-        "role": "assistant",
-        "content": reply
-    })
+    # Check if the last message is already the assistant's reply
+    if not conversation_history or conversation_history[-1]["role"] != "assistant" or conversation_history[-1]["content"] != reply:
+        conversation_history.append({
+            "id": f"assistant-{len(conversation_history)+1}",
+            "role": "assistant",
+            "content": reply
+        })
 
     return jsonify({"reply": reply, "conversation_history": conversation_history})
 
+# ------------------
+# Main Entry Point
+# ------------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    # For local development, run the Flask app in debug mode.
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
 
