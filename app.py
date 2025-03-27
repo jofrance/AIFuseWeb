@@ -1,3 +1,5 @@
+import logging
+import sys
 import threading
 import requests
 import json
@@ -7,10 +9,19 @@ import msal
 from flask import Flask, request, jsonify, render_template_string
 
 # ------------------
-# Configuration Setup
+# Logging Configuration
+# ------------------
+logging.basicConfig(
+    level=logging.DEBUG, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout  # Ensure logs are sent to stdout
+)
+logger = logging.getLogger(__name__)
+
+# ------------------
+# Configuration Setup (Managed Identity)
 # ------------------
 CONFIG = {
-    # Managed Identity Configuration
     "client_id": "eeaa6a95-a08f-4913-8e56-e00adecba9bc",  # APP_CLIENT_ID
     "authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47",  # RESOURCE_TENANT_ID embedded in URL
     "scopes": "api://9021b3a5-1f0d-4fb7-ad3f-d6989f0432d8/.default",
@@ -20,7 +31,7 @@ CONFIG = {
     "Custom Chat Instructions": {
          "ChatCustomization": "Be formal, courteous, and clear in your responses."
     },
-    # Additional Managed Identity parameters
+    # Managed Identity Additional Parameters
     "RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",
     "AZURE_REGION": "eSTS-R",
     "MI_CLIENT_ID": "5711873d-0d15-47c2-8a64-fe0fba208604",
@@ -31,36 +42,52 @@ CONFIG = {
 access_token = None
 token_lock = threading.Lock()
 
+# ------------------
+# Managed Identity Authentication Functions
+# ------------------
 def get_managed_identity_token(audience, mi_client_id):
     """
     Retrieves a managed identity token for the given audience using the MI endpoint.
     """
+    logger.debug(f"Requesting managed identity token for audience: {audience} using MI_CLIENT_ID: {mi_client_id}")
     url = f'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource={audience}&client_id={mi_client_id}'
     headers = {'Metadata': 'true'}
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
-        return response.json()['access_token']
+        token = response.json().get('access_token')
+        logger.debug("Successfully obtained managed identity token.")
+        return token
     else:
+        logger.error(f"Managed identity token request failed with status {response.status_code}: {response.text}")
         raise Exception(f"Managed identity token request failed with status {response.status_code}: {response.text}")
 
 def get_access_token():
     """
     Acquires an access token using MSAL with managed identity.
     """
+    logger.debug("Acquiring access token using MSAL with Managed Identity.")
     authority = f"https://login.microsoftonline.com/{CONFIG['RESOURCE_TENANT_ID']}"
-    app = msal.ConfidentialClientApplication(
+    try:
+        client_assertion = get_managed_identity_token(CONFIG["AUDIENCE"], CONFIG["MI_CLIENT_ID"])
+    except Exception as e:
+        logger.error(f"Error obtaining managed identity token: {e}")
+        raise e
+
+    logger.debug(f"Creating MSAL ConfidentialClientApplication with authority: {authority}")
+    app_msal = msal.ConfidentialClientApplication(
         CONFIG["client_id"],
         authority=authority,
         azure_region=CONFIG["AZURE_REGION"],
-        client_credential={"client_assertion": get_managed_identity_token(CONFIG["AUDIENCE"], CONFIG["MI_CLIENT_ID"])}
+        client_credential={"client_assertion": client_assertion}
     )
-    
-    result = app.acquire_token_for_client(CONFIG["scopes"])
+    result = app_msal.acquire_token_for_client(CONFIG["scopes"])
     if "access_token" in result:
-        print("Got access token using Managed Identity with MSAL.")
+        logger.debug("Successfully acquired access token using Managed Identity with MSAL.")
         return result["access_token"]
     else:
-        raise Exception(f"Failed to acquire token using Managed Identity with MSAL: {result.get('error_description')}")
+        error_msg = result.get("error_description", "Unknown error")
+        logger.error(f"Failed to acquire token using Managed Identity with MSAL: {error_msg}")
+        raise Exception(f"Failed to acquire token using Managed Identity with MSAL: {error_msg}")
 
 # ------------------
 # Chat Functionality
@@ -75,14 +102,16 @@ def call_chat_api(payload, headers):
     """
     api_endpoint = f'{CONFIG["apiUrl"]}experiment/{CONFIG["experimentId"]}'
     reply = None
+    logger.debug(f"Calling API at {api_endpoint} with payload: {payload} and headers: {headers}")
     while reply is None:
         try:
             response = requests.post(api_endpoint, headers=headers, data=json.dumps(payload), timeout=CONFIG["API_TIMEOUT"])
+            logger.debug(f"API Response Code: {response.status_code}")
             if response.status_code == 200:
                 data = response.json()
+                logger.debug(f"API Response JSON: {data}")
                 messages = data.get("chatHistory", {}).get("messages", [])
                 if messages:
-                    # Assume the last message is the assistant reply.
                     last_message = messages[-1]
                     reply = last_message.get("content", "No content in reply.")
                 else:
@@ -90,18 +119,21 @@ def call_chat_api(payload, headers):
                 if "chatHistory" in data and "messages" in data["chatHistory"]:
                     conversation_history[:] = data["chatHistory"]["messages"]
             else:
-                print(f"Error {response.status_code}: {response.text}")
+                logger.error(f"Error {response.status_code}: {response.text}")
         except Exception as e:
-            print(f"Exception during API call: {e}")
+            logger.exception(f"Exception during API call: {e}")
         if reply is None:
+            logger.debug("No reply obtained, retrying in 5 seconds...")
             time.sleep(5)
+    logger.debug(f"Final reply obtained: {reply}")
     return reply
 
 # ------------------
-# Flask Application
+# Flask Application Setup
 # ------------------
 app = Flask(__name__)
 
+# HTML Template for the Chat Interface
 CHAT_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -159,14 +191,35 @@ CHAT_TEMPLATE = """
 </html>
 """
 
+# ------------------
+# Flask Request Logging Hooks
+# ------------------
+@app.before_request
+def log_request_info():
+    logger.debug(f"Incoming Request: {request.method} {request.url}")
+    logger.debug(f"Headers: {request.headers}")
+    logger.debug(f"Body: {request.get_data()}")
+
+@app.after_request
+def log_response_info(response):
+    logger.debug(f"Response Status: {response.status}")
+    logger.debug(f"Response Headers: {response.headers}")
+    return response
+
+# ------------------
+# Routes
+# ------------------
 @app.route("/")
 def index():
+    logger.debug("Rendering index page.")
     return render_template_string(CHAT_TEMPLATE, conversation=conversation_history)
 
 @app.route("/chat", methods=["POST"])
 def chat_route():
+    logger.debug("Entered /chat route.")
     global access_token
     user_message = request.form.get("message", "").strip()
+    logger.debug(f"User message received: '{user_message}'")
     if user_message:
         conversation_history.append({
             "id": f"user-{len(conversation_history)+1}",
@@ -182,6 +235,7 @@ def chat_route():
                 "content": default_search
             })
             user_message = default_search
+            logger.debug("No user message provided; using default search.")
 
     payload = {
         "dataSearchKey": "CaseNumber",
@@ -194,13 +248,16 @@ def chat_route():
         },
         "MaxNumberOfRows": 5000
     }
+    logger.debug(f"Payload built: {payload}")
 
     with token_lock:
         token = access_token
     if not token:
+        logger.debug("No existing access token found, acquiring new token.")
         token = get_access_token()
         with token_lock:
             access_token = token
+    logger.debug(f"Access token: {token}")
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -219,15 +276,18 @@ def chat_route():
             "content": greeting
         }
         conversation_history.append(system_msg)
+        logger.debug(f"System message appended: {system_msg}")
 
-    # Avoid duplicate assistant messages
     if not conversation_history or conversation_history[-1]["role"] != "assistant" or conversation_history[-1]["content"] != reply:
-        conversation_history.append({
+        assistant_msg = {
             "id": f"assistant-{len(conversation_history)+1}",
             "role": "assistant",
             "content": reply
-        })
+        }
+        conversation_history.append(assistant_msg)
+        logger.debug(f"Assistant message appended: {assistant_msg}")
 
+    logger.debug(f"Returning conversation history: {conversation_history}")
     return jsonify({"reply": reply, "conversation_history": conversation_history})
 
 # ------------------
@@ -235,5 +295,6 @@ def chat_route():
 # ------------------
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
+    logger.debug(f"Starting Flask app on port {port}")
     app.run(host='0.0.0.0', port=port, debug=True)
 
