@@ -5,18 +5,20 @@ import requests
 import json
 import time
 import os
-import jwt
+import msal
 from flask import Flask, request, jsonify, render_template_string
 
 # ------------------
 # Logging Configuration
 # ------------------
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.DEBUG, 
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
+    stream=sys.stdout  # Ensure logs are sent to stdout
 )
 logger = logging.getLogger(__name__)
+
+# Add a FileHandler to also log to a file named "app.log"
 file_handler = logging.FileHandler("app.log")
 file_handler.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -24,24 +26,23 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 # ------------------
-# Configuration Setup
+# Configuration Setup (Managed Identity)
 # ------------------
-# This CONFIG dictionary now includes parameters needed for Managed Identity authentication.
 CONFIG = {
-    "client_id": "405a9ef7-5457-4381-9c0c-f3c9321e4a89",      # Your APP_REGISTRATION_CLIENT_ID
-    #"authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47",
-    "authority": "https://login.microsoftonline.com/16b3c013-d300-468d-ac64-7eda0820b6d3",
-    "scopes": "api://9021b3a5-1f0d-4fb7-ad3f-d6989f0432d8/.default",  # Zebra API scope
+    "client_id": "eeaa6a95-a08f-4913-8e56-e00adecba9bc",  # APP_CLIENT_ID
+    "authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47",  # RESOURCE_TENANT_ID embedded in URL
+    "scopes": "api://9021b3a5-1f0d-4fb7-ad3f-d6989f0432d8/.default",
     "apiUrl": "https://zebra-ai-api-prd.azurewebsites.net/",
     "experimentId": "582c5e80-b307-43f9-bc86-efd0a6551907",
-    "API_TIMEOUT": 30,  # seconds
+    "API_TIMEOUT": 30,  # In seconds
     "Custom Chat Instructions": {
          "ChatCustomization": "Be formal, courteous, and clear in your responses."
     },
-    # Managed Identity / Federated credentials
-    "RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",   # Corp Tenant ID
-    "MI_CLIENT_ID": "5711873d-0d15-47c2-8a64-fe0fba208604",           # Managed Identity Client ID
-    # For broker flows, you might also include "AZURE_REGION": "eSTS-R", etc.
+    # Managed Identity Additional Parameters
+    "RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",
+    "AZURE_REGION": "eSTS-R",
+    "MI_CLIENT_ID": "5711873d-0d15-47c2-8a64-fe0fba208604",
+    "AUDIENCE": "api://AzureADTokenExchange"
 }
 
 # Globals for token management.
@@ -49,57 +50,51 @@ access_token = None
 token_lock = threading.Lock()
 
 # ------------------
-# Managed Identity Authentication using FederatedApplicationCredential
+# Managed Identity Authentication Functions
 # ------------------
-from azure.identity import ManagedIdentityCredential, ClientAssertionCredential
-from azure.core.credentials import TokenCredential, AccessToken
-
-MSI_ASSERTION_SCOPE = "api://AzureADTokenExchange/.default"
-ZEBRA_API_SCOPE = CONFIG["scopes"]
-
-class FederatedApplicationCredential(TokenCredential):
-    def __init__(self, tenant_id: str, msi_client_id: str, app_client_id: str) -> None:
-        self.managed_identity = ManagedIdentityCredential(client_id=msi_client_id)
-        self.client_assertion = ClientAssertionCredential(
-            tenant_id=tenant_id,
-            client_id=app_client_id,
-            func=self.compute_assertion
-        )
-        super().__init__()
-
-    def get_token(self, *scopes, **kwargs) -> AccessToken:
-        return self.client_assertion.get_token(*scopes, **kwargs)
-
-    def compute_assertion(self):
-        msi_token = self.managed_identity.get_token(MSI_ASSERTION_SCOPE)
-        logger.info("Obtained MSI token for assertion.")
-        return msi_token.token
+def get_managed_identity_token(audience, mi_client_id):
+    """
+    Retrieves a managed identity token for the given audience using the MI endpoint.
+    """
+    logger.debug(f"Requesting managed identity token for audience: {audience} using MI_CLIENT_ID: {mi_client_id}")
+    url = f'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource={audience}&client_id={mi_client_id}'
+    headers = {'Metadata': 'true'}
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        token = response.json().get('access_token')
+        logger.debug("Successfully obtained managed identity token.")
+        return token
+    else:
+        logger.error(f"Managed identity token request failed with status {response.status_code}: {response.text}")
+        raise Exception(f"Managed identity token request failed with status {response.status_code}: {response.text}")
 
 def get_access_token():
-    """Acquires an access token using Managed Identity with MSAL."""
-    mi_client_id = CONFIG.get("MI_CLIENT_ID")
-    app_client_id = CONFIG.get("client_id")
-    tenant_id = CONFIG.get("RESOURCE_TENANT_ID")
-    if not all([mi_client_id, app_client_id, tenant_id]):
-        msg = "Missing required configuration for Managed Identity."
-        logger.error(msg)
-        raise ValueError(msg)
-    cred = FederatedApplicationCredential(
-         tenant_id=tenant_id,
-         msi_client_id=mi_client_id,
-         app_client_id=app_client_id
-    )
+    """
+    Acquires an access token using MSAL with managed identity.
+    """
+    logger.debug("Acquiring access token using MSAL with Managed Identity.")
+    authority = f"https://login.microsoftonline.com/{CONFIG['RESOURCE_TENANT_ID']}"
     try:
-        token_obj = cred.get_token(ZEBRA_API_SCOPE)
-        access_tok = token_obj.token
-        # Decode token payload (without verifying signature) to log claims.
-        token_payload = jwt.decode(access_tok, options={"verify_signature": False, "verify_aud": False})
-        logger.info(f"Access token claims: {token_payload}")
-        logger.info("Successfully obtained ZebraAI API access token.")
-        return access_tok
+        client_assertion = get_managed_identity_token(CONFIG["AUDIENCE"], CONFIG["MI_CLIENT_ID"])
     except Exception as e:
-        logger.error(f"Error obtaining API access token: {e}", exc_info=True)
+        logger.error(f"Error obtaining managed identity token: {e}")
         raise e
+
+    logger.debug(f"Creating MSAL ConfidentialClientApplication with authority: {authority}")
+    app_msal = msal.ConfidentialClientApplication(
+        CONFIG["client_id"],
+        authority=authority,
+        azure_region=CONFIG["AZURE_REGION"],
+        client_credential={"client_assertion": client_assertion}
+    )
+    result = app_msal.acquire_token_for_client(CONFIG["scopes"])
+    if "access_token" in result:
+        logger.debug("Successfully acquired access token using Managed Identity with MSAL.")
+        return result["access_token"]
+    else:
+        error_msg = result.get("error_description", "Unknown error")
+        logger.error(f"Failed to acquire token using Managed Identity with MSAL: {error_msg}")
+        raise Exception(f"Failed to acquire token using Managed Identity with MSAL: {error_msg}")
 
 # ------------------
 # Chat Functionality
@@ -118,10 +113,10 @@ def call_chat_api(payload, headers):
     while reply is None:
         try:
             response = requests.post(api_endpoint, headers=headers, data=json.dumps(payload), timeout=CONFIG["API_TIMEOUT"])
-            logger.debug(f"API response code: {response.status_code}")
+            logger.debug(f"API Response Code: {response.status_code}")
             if response.status_code == 200:
                 data = response.json()
-                logger.debug(f"API response JSON: {data}")
+                logger.debug(f"API Response JSON: {data}")
                 messages = data.get("chatHistory", {}).get("messages", [])
                 if messages:
                     last_message = messages[-1]
@@ -141,10 +136,11 @@ def call_chat_api(payload, headers):
     return reply
 
 # ------------------
-# Flask Application
+# Flask Application Setup
 # ------------------
 app = Flask(__name__)
 
+# HTML Template for the Chat Interface
 CHAT_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -202,6 +198,24 @@ CHAT_TEMPLATE = """
 </html>
 """
 
+# ------------------
+# Flask Request Logging Hooks
+# ------------------
+@app.before_request
+def log_request_info():
+    logger.debug(f"Incoming Request: {request.method} {request.url}")
+    logger.debug(f"Headers: {request.headers}")
+    logger.debug(f"Body: {request.get_data()}")
+
+@app.after_request
+def log_response_info(response):
+    logger.debug(f"Response Status: {response.status}")
+    logger.debug(f"Response Headers: {response.headers}")
+    return response
+
+# ------------------
+# Routes
+# ------------------
 @app.route("/")
 def index():
     logger.debug("Rendering index page.")
@@ -209,6 +223,7 @@ def index():
 
 @app.route("/chat", methods=["POST"])
 def chat_route():
+    logger.debug("Entered /chat route.")
     global access_token
     user_message = request.form.get("message", "").strip()
     logger.debug(f"User message received: '{user_message}'")
@@ -259,7 +274,6 @@ def chat_route():
 
     reply = call_chat_api(payload, headers)
 
-    # Inject custom system prompt if no system message exists.
     if not any(msg["role"] == "system" for msg in conversation_history):
         custom_instruction = CONFIG.get("Custom Chat Instructions", {}).get("ChatCustomization", "Run a job to start the conversation.")
         greeting = f"Hi, {custom_instruction}"
@@ -271,7 +285,6 @@ def chat_route():
         conversation_history.append(system_msg)
         logger.debug(f"System message appended: {system_msg}")
 
-    # Prevent duplicate assistant messages:
     if not conversation_history or conversation_history[-1]["role"] != "assistant" or conversation_history[-1]["content"] != reply:
         assistant_msg = {
             "id": f"assistant-{len(conversation_history)+1}",
@@ -280,12 +293,13 @@ def chat_route():
         }
         conversation_history.append(assistant_msg)
         logger.debug(f"Assistant message appended: {assistant_msg}")
-    else:
-        logger.debug("Assistant message already present; not appending duplicate.")
 
     logger.debug(f"Returning conversation history: {conversation_history}")
     return jsonify({"reply": reply, "conversation_history": conversation_history})
 
+# ------------------
+# Main Entry Point
+# ------------------
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     logger.debug(f"Starting Flask app on port {port}")
