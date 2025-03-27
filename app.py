@@ -28,10 +28,10 @@ logger.addHandler(file_handler)
 # ------------------
 # This CONFIG dictionary now includes parameters needed for Managed Identity authentication.
 CONFIG = {
-    #"client_id": "405a9ef7-5457-4381-9c0c-f3c9321e4a89",      # Your APP_REGISTRATION_CLIENT_ID
-    "client_id": "4f6c8552-7b64-4327-9b2b-8d32b41bfe44",
+    "client_id": "4f6c8552-7b64-4327-9b2b-8d32b41bfe44", # This is the Object (principal) ID of the system managed Identity of the WebApp
     #"authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47",
-    "authority": "https://login.microsoftonline.com/16b3c013-d300-468d-ac64-7eda0820b6d3",
+    #"authority": "https://login.microsoftonline.com/16b3c013-d300-468d-ac64-7eda0820b6d3",
+    "authority": "api://AzureADTokenExchange/.default",
     "scopes": "api://9021b3a5-1f0d-4fb7-ad3f-d6989f0432d8/.default",  # Zebra API scope
     "apiUrl": "https://zebra-ai-api-prd.azurewebsites.net/",
     "experimentId": "582c5e80-b307-43f9-bc86-efd0a6551907",
@@ -40,9 +40,10 @@ CONFIG = {
          "ChatCustomization": "Be formal, courteous, and clear in your responses."
     },
     # Managed Identity / Federated credentials
-    "RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",   # Corp Tenant ID
+    #"RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",   # Corp Tenant ID
+    "RESOURCE_TENANT_ID": "16b3c013-d300-468d-ac64-7eda0820b6d3",   #Tenant ID of the WebApp
     #"MI_CLIENT_ID": "4f6c8552-7b64-4327-9b2b-8d32b41bfe44",           # Managed Identity Client ID
-    "MI_CLIENT_ID": "405a9ef7-5457-4381-9c0c-f3c9321e4a89",           # Managed Identity Client ID
+    "MI_CLIENT_ID": "405a9ef7-5457-4381-9c0c-f3c9321e4a89",           # Managed Identity Client ID, this is the ApplicationID of the EnterpriseApplication
     # For broker flows, you might also include "AZURE_REGION": "eSTS-R", etc.
 }
 
