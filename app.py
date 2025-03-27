@@ -40,7 +40,7 @@ CONFIG = {
     },
     # Managed Identity / Federated credentials
     "RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",   # Corp Tenant ID
-    "MI_CLIENT_ID": "5711873d-0d15-47c2-8a64-fe0fba208604",           # Managed Identity Client ID
+    "MI_CLIENT_ID": "4f6c8552-7b64-4327-9b2b-8d32b41bfe44",           # Managed Identity Client ID
     # For broker flows, you might also include "AZURE_REGION": "eSTS-R", etc.
 }
 
