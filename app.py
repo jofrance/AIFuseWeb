@@ -3,49 +3,64 @@ import requests
 import json
 import time
 import os
+import msal
 from flask import Flask, request, jsonify, render_template_string
 
 # ------------------
 # Configuration Setup
 # ------------------
 CONFIG = {
-    "client_id": "751c47e2-782e-4d75-b304-37f68a9d45fd",
-    "authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47",
+    # Managed Identity Configuration
+    "client_id": "eeaa6a95-a08f-4913-8e56-e00adecba9bc",  # APP_CLIENT_ID
+    "authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47",  # RESOURCE_TENANT_ID embedded in URL
     "scopes": "api://9021b3a5-1f0d-4fb7-ad3f-d6989f0432d8/.default",
     "apiUrl": "https://zebra-ai-api-prd.azurewebsites.net/",
     "experimentId": "582c5e80-b307-43f9-bc86-efd0a6551907",
     "API_TIMEOUT": 30,  # In seconds
     "Custom Chat Instructions": {
          "ChatCustomization": "Be formal, courteous, and clear in your responses."
-    }
+    },
+    # Additional Managed Identity parameters
+    "RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",
+    "AZURE_REGION": "eSTS-R",
+    "MI_CLIENT_ID": "5711873d-0d15-47c2-8a64-fe0fba208604",
+    "AUDIENCE": "api://AzureADTokenExchange"
 }
 
 # Globals for token management.
 access_token = None
 token_lock = threading.Lock()
 
+def get_managed_identity_token(audience, mi_client_id):
+    """
+    Retrieves a managed identity token for the given audience using the MI endpoint.
+    """
+    url = f'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource={audience}&client_id={mi_client_id}'
+    headers = {'Metadata': 'true'}
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()['access_token']
+    else:
+        raise Exception(f"Managed identity token request failed with status {response.status_code}: {response.text}")
+
 def get_access_token():
-    """Acquire an access token using MSAL."""
-    from msal import PublicClientApplication
-    if CONFIG.get("msal_app") is None:
-        CONFIG["msal_app"] = PublicClientApplication(
-            client_id=CONFIG["client_id"],
-            authority=CONFIG["authority"],
-        )
-    accounts = CONFIG["msal_app"].get_accounts()
-    scopes = CONFIG["scopes"]
-    if isinstance(scopes, str):
-        scopes = [scopes]
-    result = None
-    if accounts:
-        result = CONFIG["msal_app"].acquire_token_silent(scopes, account=accounts[0])
-        if result and "access_token" in result:
-            return result["access_token"]
-    result = CONFIG["msal_app"].acquire_token_interactive(scopes)
+    """
+    Acquires an access token using MSAL with managed identity.
+    """
+    authority = f"https://login.microsoftonline.com/{CONFIG['RESOURCE_TENANT_ID']}"
+    app = msal.ConfidentialClientApplication(
+        CONFIG["client_id"],
+        authority=authority,
+        azure_region=CONFIG["AZURE_REGION"],
+        client_credential={"client_assertion": get_managed_identity_token(CONFIG["AUDIENCE"], CONFIG["MI_CLIENT_ID"])}
+    )
+    
+    result = app.acquire_token_for_client(CONFIG["scopes"])
     if "access_token" in result:
+        print("Got access token using Managed Identity with MSAL.")
         return result["access_token"]
     else:
-        raise Exception("Failed to get access token")
+        raise Exception(f"Failed to acquire token using Managed Identity with MSAL: {result.get('error_description')}")
 
 # ------------------
 # Chat Functionality
@@ -67,6 +82,7 @@ def call_chat_api(payload, headers):
                 data = response.json()
                 messages = data.get("chatHistory", {}).get("messages", [])
                 if messages:
+                    # Assume the last message is the assistant reply.
                     last_message = messages[-1]
                     reply = last_message.get("content", "No content in reply.")
                 else:
@@ -167,7 +183,6 @@ def chat_route():
             })
             user_message = default_search
 
-    # Build payload.
     payload = {
         "dataSearchKey": "CaseNumber",
         "DataSearchOptions": {
@@ -193,10 +208,8 @@ def chat_route():
         "Accept": "application/json"
     }
 
-    # Call the API (this will block until a valid reply is received).
     reply = call_chat_api(payload, headers)
 
-    # Inject custom system prompt if no system message exists.
     if not any(msg["role"] == "system" for msg in conversation_history):
         custom_instruction = CONFIG.get("Custom Chat Instructions", {}).get("ChatCustomization", "Run a job to start the conversation.")
         greeting = f"Hi, {custom_instruction}"
@@ -207,7 +220,7 @@ def chat_route():
         }
         conversation_history.append(system_msg)
 
-    # Check if the last message is already the assistant's reply
+    # Avoid duplicate assistant messages
     if not conversation_history or conversation_history[-1]["role"] != "assistant" or conversation_history[-1]["content"] != reply:
         conversation_history.append({
             "id": f"assistant-{len(conversation_history)+1}",
@@ -221,7 +234,6 @@ def chat_route():
 # Main Entry Point
 # ------------------
 if __name__ == "__main__":
-    # For local development, run the Flask app in debug mode.
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
 
