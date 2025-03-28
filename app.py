@@ -28,7 +28,7 @@ logger.addHandler(file_handler)
 # ------------------
 # This CONFIG dictionary now includes parameters needed for Managed Identity authentication.
 CONFIG = {
-    "client_id": "e1fe6dd8-ba31-4d61-89e7-88639da4683d", # This is the Object (principal) ID of the system managed Identity of the WebApp
+    "client_id": "4f6c8552-7b64-4327-9b2b-8d32b41bfe44", # This is the Object (principal) ID of the system managed Identity of the WebApp
     #"authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47",
     #"authority": "https://login.microsoftonline.com/16b3c013-d300-468d-ac64-7eda0820b6d3",
     "authority": "api://AzureADTokenExchange/.default",
@@ -60,8 +60,8 @@ MSI_ASSERTION_SCOPE = "api://AzureADTokenExchange/.default"
 ZEBRA_API_SCOPE = CONFIG["scopes"]
 
 class FederatedApplicationCredential(TokenCredential):
-    def __init__(self, tenant_id: str, msi_client_id: str, app_client_id: str) -> None:
-        self.managed_identity = ManagedIdentityCredential(client_id=msi_client_id)
+    def __init__(self, tenant_id: str, app_client_id: str) -> None:
+        self.managed_identity = ManagedIdentityCredential()
         self.client_assertion = ClientAssertionCredential(
             tenant_id=tenant_id,
             client_id=app_client_id,
@@ -79,16 +79,14 @@ class FederatedApplicationCredential(TokenCredential):
 
 def get_access_token():
     """Acquires an access token using Managed Identity with MSAL."""
-    mi_client_id = CONFIG.get("MI_CLIENT_ID")
     app_client_id = CONFIG.get("client_id")
     tenant_id = CONFIG.get("RESOURCE_TENANT_ID")
-    if not all([mi_client_id, app_client_id, tenant_id]):
+    if not all([app_client_id, tenant_id]):
         msg = "Missing required configuration for Managed Identity."
         logger.error(msg)
         raise ValueError(msg)
     cred = FederatedApplicationCredential(
          tenant_id=tenant_id,
-         msi_client_id=mi_client_id,
          app_client_id=app_client_id
     )
     try:
