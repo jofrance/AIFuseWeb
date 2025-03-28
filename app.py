@@ -74,6 +74,7 @@ class FederatedApplicationCredential(TokenCredential):
 
     def compute_assertion(self):
         msi_token = self.managed_identity.get_token(MSI_ASSERTION_SCOPE)
+        print(f"msi_token: {msi_token}")
         logger.info("Obtained MSI token for assertion.")
         return msi_token.token
 
@@ -90,13 +91,17 @@ def get_access_token():
          tenant_id=tenant_id,
          app_client_id=app_client_id
     )
+    print(f"cred: {cred}")
     try:
         token_obj = cred.get_token(ZEBRA_API_SCOPE)
         access_tok = token_obj.token
         # Decode token payload (without verifying signature) to log claims.
         token_payload = jwt.decode(access_tok, options={"verify_signature": False, "verify_aud": False})
+        print(f"token_payload: {token_payload}")
         logger.info(f"Access token claims: {token_payload}")
         logger.info("Successfully obtained ZebraAI API access token.")
+        print(f"token_obj: {token_obj}")
+        print(f"access_tok: {access_tok}")
         return access_tok
     except Exception as e:
         logger.error(f"Error obtaining API access token: {e}", exc_info=True)
