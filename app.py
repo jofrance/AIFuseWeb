@@ -41,8 +41,8 @@ CONFIG = {
          "ChatCustomization": "Be formal, courteous, and clear in your responses."
     },
     # Managed Identity / Federated credentials
-    #"RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",   # Corp Tenant ID
-    "RESOURCE_TENANT_ID": "16b3c013-d300-468d-ac64-7eda0820b6d3",   #Tenant ID of the WebApp
+    "RESOURCE_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",   # Corp Tenant ID
+    #"RESOURCE_TENANT_ID": "16b3c013-d300-468d-ac64-7eda0820b6d3",   #Tenant ID of the WebApp
     "MI_CLIENT_ID": "405a9ef7-5457-4381-9c0c-f3c9321e4a89",           # This is the ApplicationID of the EnterpriseApplication
     # For broker flows, you might also include "AZURE_REGION": "eSTS-R", etc.
 }
